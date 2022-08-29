@@ -58,7 +58,7 @@ def worker_watch_queues(conn, queues, callbacks):
         callbacks[name](*args)
 
 
-# 延迟队列，任务添加到有序集和中，待执行时间作为分值
+# 将任务添加到有序集合中，待执行时间作为分值
 # 外加一个进程检查需要执行的任务，进其加入到执行任务队列中
 # queue,name,args, identifier: 处理任务队列名，处理任务的回掉函数名，回掉函数参数，任务唯一标识
 # 无需延迟时，直接加入任务队列中
@@ -70,3 +70,29 @@ def execute_later(conn, queue, name, args, delay=0):
     else:
         conn.rpush('queue:' + queue, item)
     return identifier
+
+
+# 投递任务到队列
+def poll_queue():
+    while not QUIT:
+        # 获取延迟集和中第一个任务
+        item = conn.zrange('delayed:', 0, 0, withscores=True)
+        if not item or item[0][1] > time.time():
+            # 任务队列没有任务，或者任务执行时间还没有到
+            time.sleep(.01)
+            continue
+
+        item = item[0][0]
+        identifier, queue, name, args = json.loads(item)
+
+        # 为移动任务，尝试获取锁
+        locked = acquire_lock(conn, identifier)
+        if not locked:
+            continue
+
+        # 将任务放入到队列中
+        if conn.zrem('delayed:', item):
+            conn.rpush('queue:' + queue, item)
+
+        # 释放锁
+        release_lock(conn, identifier, locked)
